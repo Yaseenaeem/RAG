@@ -96,7 +96,8 @@ Follow-up:
 What about approval?
 
 Rewritten query:
-remote work policy approval ```
+remote work policy approval
+```
 
 
 ## Answer Generation
