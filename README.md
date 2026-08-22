@@ -4,6 +4,7 @@ A local Retrieval-Augmented Generation (RAG) system that allows users to query i
 
 The project is currently at **V1 — Backend RAG System**.
 
+
 ## Overview
 
 The goal of this project was to understand and build the complete RAG pipeline rather than simply connecting a document to an LLM.
@@ -95,16 +96,16 @@ Follow-up:
 What about approval?
 
 Rewritten query:
-remote work policy approval
+remote work policy approval ```
 
 
-## 8. Answer Generation
+## Answer Generation
 
 The top-ranked chunks are provided as context to Gemma 3 running locally through Ollama.
 The model is instructed to answer only from the retrieved context.
 
 
-## 9. Sources
+## Sources
 
 The system returns the document name and page number associated with the retrieved context.
 
