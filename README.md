@@ -155,6 +155,12 @@ Generated Answer
 The system provides an answer based on the retrieved document context and includes the relevant document/page sources.
 
 
+## Limitations
+
+This is the first version (V1) of the project and is intended as a functional foundation for a broader RAG system. While the system can retrieve relevant information and avoid generating answers when sufficient evidence is not found, retrieval may occasionally include semantically related but irrelevant chunks, and the displayed sources represent retrieved documents rather than guaranteed direct evidence for every answer. Future versions can improve document parsing and chunking, metadata-aware retrieval, reranking and context filtering, and more precise source attribution.
+
+
+
 ## Project Status
 V1 — Backend RAG ✓
 
