@@ -123,6 +123,10 @@ NumPy
 PyPDF
 
 
+## Documents: 
+The RAG assistant was tested using publicly available sample HR policy templates, including employee handbooks, remote-work policies, and HR manuals. These documents were obtained from publicly accessible sources and are used solely as demonstration/test data for the project.
+
+
 ## Why Hybrid Retrieval?
 
 Semantic search is useful for understanding the meaning of a query, while keyword search can be useful when exact terms matter.
