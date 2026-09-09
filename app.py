@@ -181,9 +181,11 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
+import requests  # Ensure 'import requests' is added at the top of Section 3
 
 class RAGEngine:
     def __init__(self):
+        # 1. Complete Knowledge Base Setup
         self.documents = [
             {
                 "name": "Remote_Work_Policy.pdf",
@@ -201,48 +203,94 @@ class RAGEngine:
                 "name": "Dress_Code_Policy.pdf",
                 "page": 2,
                 "path": "docs/Dress_Code_Policy.pdf",
-                "text": "Dress Code Policy: Standard office attire is business casual from Monday to Thursday. Smart casual wear (including clean denim) is permitted on Fridays."
+                "text": "Dress Code Policy: Standard office attire is business casual from Monday to Thursday (professional slacks, trousers, blouses, collared shirts). Smart casual wear (including clean denim) is permitted on Fridays."
             },
             {
                 "name": "IT_Security_Guidelines.pdf",
                 "page": 3,
                 "path": "docs/IT_Security_Guidelines.pdf",
                 "text": "IT Security Rules: Passwords must be updated every 90 days. Multi-factor authentication (MFA) is required on all company accounts and software portals."
+            },
+            {
+                "name": "Drug_Policy.pdf",
+                "page": 1,
+                "path": "docs/Drug_Policy.pdf",
+                "text": "Drug Policy: The company maintains a zero-tolerance drug-free workplace environment. Possession, consumption, or distribution of illegal substances (including marijuana and cocaine) on company premises or during work hours is strictly prohibited. Any violation of this policy will result in immediate termination of employment."
             }
         ]
         self.document_count = len(self.documents)
         
+        # 2. Vector Indexing
         self.model = SentenceTransformer("all-MiniLM-L6-v2")
         corpus_texts = [doc["text"] for doc in self.documents]
-        
         embeddings = self.model.encode(corpus_texts)
         dimension = embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
         self.index.add(np.array(embeddings).astype("float32"))
         
+        # 3. BM25 Lexical Indexing
         tokenized_corpus = [doc.lower().split() for doc in corpus_texts]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
+    def query_ollama_gemma3(self, prompt):
+        """Sends context and query to local Ollama instance running Gemma 3."""
+        try:
+            url = "http://localhost:11434/api/generate"
+            payload = {
+                "model": "gemma3",
+                "prompt": prompt,
+                "stream": False
+            }
+            response = requests.post(url, json=payload, timeout=120)
+            if response.status_code == 200:
+                return response.json().get("response", "").strip()
+            else:
+                return f"Error from Ollama API: Status Code {response.status_code}"
+        except Exception as e:
+            return f"Failed to connect to local Ollama Gemma 3 engine: {str(e)}"
+
     def ask(self, query, previous_questions=None):
+        # A. FAISS Vector Retrieval (k=5)
         query_vector = self.model.encode([query]).astype("float32")
-        distances, faiss_indices = self.index.search(query_vector, k=1)
+        distances, faiss_indices = self.index.search(query_vector, k=min(5, len(self.documents)))
         
+        # B. BM25 Lexical Retrieval (k=5)
         tokenized_query = query.lower().split()
         bm25_scores = self.bm25.get_scores(tokenized_query)
-        best_bm25_score = max(bm25_scores) if len(bm25_scores) > 0 else 0
+        bm25_indices = np.argsort(bm25_scores)[::-1][:min(5, len(self.documents))]
         
-        best_faiss_idx = faiss_indices[0][0]
-        best_distance = distances[0][0]
-        
-        # Distance threshold check: Only return result if vector distance is close (< 1.35) or keywords match (> 0.5)
-        if best_distance < 1.35 or best_bm25_score > 0.5:
-            matched_doc = self.documents[best_faiss_idx]
-            answer = f"Based on internal documentation:\n\n{matched_doc['text']}"
-            sources = [{"name": matched_doc["name"], "page": matched_doc["page"], "path": matched_doc["path"]}]
-        else:
-            answer = "I couldn't find specific documentation addressing your prompt in the knowledge base."
-            sources = []
+        # C. Combined Fusion & Re-ranking
+        candidate_indices = list(set(list(faiss_indices[0]) + list(bm25_indices)))
+        scored_candidates = []
+        for idx in candidate_indices:
+            bm25_score = bm25_scores[idx]
+            vec_dist = distances[0][0] if idx in faiss_indices[0] else 2.0
+            combined_score = bm25_score + (1.0 / (1.0 + vec_dist))
+            scored_candidates.append((combined_score, self.documents[idx]))
             
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        top_docs = [doc for score, doc in scored_candidates[:3]]
+        
+        context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
+        
+        # D. System Prompt for Gemma 3
+        prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately and thoroughly using ONLY the provided internal documentation context below.
+
+Rules:
+1. Synthesize a direct, concise, and helpful answer. (e.g., if asked about trousers, confirm if business casual allows slacks/trousers).
+2. If the user's query cannot be answered using ONLY the context provided below, state strictly: "I couldn't find specific documentation addressing your prompt in the knowledge base."
+3. Do not assume or invent facts outside the provided documentation.
+
+Documentation Context:
+{context_str}
+
+User Question: {query}
+Answer:"""
+
+        # E. Ollama Gemma 3 Synthesis Call
+        answer = self.query_ollama_gemma3(prompt)
+        sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
+        
         return {"answer": answer, "sources": sources}
 
 # Initialize Engine
