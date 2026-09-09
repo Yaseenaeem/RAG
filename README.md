@@ -8,9 +8,10 @@ This project updates the previous terminal-based backend (**V1**) into an intera
 
 ## Live Application
 
-Try the deployed application directly in your browser:  
-[Insert Your Deployed Streamlit Link Here]
-
+Try the deployed application directly in your browser: 
+```
+https://korva-ai-assistant.streamlit.app/
+```
 No installation or setup required, click the link above to test KORVA directly in your browser.
 
 ---
