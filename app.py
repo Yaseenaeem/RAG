@@ -326,12 +326,12 @@ Documentation Context:
 User Question: {query}
 Answer:"""
 
-        # E. Unified LLM Call
+        # E. Unified LLM Call (Ensures generated text is returned, NOT numerical scores)
         answer = self.query_llm_engine(prompt)
         sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
         
         return {"answer": answer, "sources": sources}
-
+        
 # Initialize Engine
 @st.cache_resource
 def get_rag_engine():
