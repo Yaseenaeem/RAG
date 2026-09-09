@@ -225,26 +225,24 @@ class RAGEngine:
 
     def ask(self, query, previous_questions=None):
         query_vector = self.model.encode([query]).astype("float32")
-        _, faiss_indices = self.index.search(query_vector, k=2)
+        distances, faiss_indices = self.index.search(query_vector, k=1)
         
         tokenized_query = query.lower().split()
         bm25_scores = self.bm25.get_scores(tokenized_query)
-        bm25_indices = np.argsort(bm25_scores)[::-1][:2]
+        best_bm25_score = max(bm25_scores) if len(bm25_scores) > 0 else 0
         
-        combined_indices = list(dict.fromkeys(list(faiss_indices[0]) + list(bm25_indices)))
-        matched_docs = [self.documents[i] for i in combined_indices if i < len(self.documents)]
+        best_faiss_idx = faiss_indices[0][0]
+        best_distance = distances[0][0]
         
-        if matched_docs:
-            context = " ".join([doc["text"] for doc in matched_docs])
-            answer = f"Based on internal documentation:\n\n{context}"
+        # Distance threshold check: Only return result if vector distance is close (< 1.35) or keywords match (> 0.5)
+        if best_distance < 1.35 or best_bm25_score > 0.5:
+            matched_doc = self.documents[best_faiss_idx]
+            answer = f"Based on internal documentation:\n\n{matched_doc['text']}"
+            sources = [{"name": matched_doc["name"], "page": matched_doc["page"], "path": matched_doc["path"]}]
         else:
             answer = "I couldn't find specific documentation addressing your prompt in the knowledge base."
+            sources = []
             
-        sources = [
-            {"name": doc["name"], "page": doc["page"], "path": doc["path"]}
-            for doc in matched_docs
-        ]
-        
         return {"answer": answer, "sources": sources}
 
 # Initialize Engine
