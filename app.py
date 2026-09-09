@@ -232,7 +232,7 @@ class RAGEngine:
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def query_llm_engine(self, prompt):
-        """Tries local Ollama first; automatically falls back to Groq API on Streamlit Cloud."""
+        """Tries local Ollama first; automatically falls back to active Groq models."""
         # 1. Try Local Ollama (Active when running locally on your laptop)
         try:
             url = "http://localhost:11434/api/generate"
@@ -243,18 +243,35 @@ class RAGEngine:
         except Exception:
             pass  # Local Ollama not reachable; falling back to Cloud API
 
-        # 2. Fallback to Groq API (Active on Streamlit Cloud 24/7)
+        # 2. Fallback to Groq API (Iterates through available model IDs to avoid 404 errors)
         try:
             from groq import Groq
             api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
             if api_key:
                 client = Groq(api_key=api_key)
-                completion = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.2,
-                )
-                return completion.choices[0].message.content.strip()
+                
+                # List of potential active models on Groq
+                candidate_models = [
+                    "llama-3.1-8b-instant",
+                    "llama-3.3-70b-versatile",
+                    "llama3-8b-8192",
+                    "llama3-70b-8192"
+                ]
+                
+                last_error = None
+                for model_id in candidate_models:
+                    try:
+                        completion = client.chat.completions.create(
+                            messages=[{"role": "user", "content": prompt}],
+                            model=model_id,
+                            temperature=0.2,
+                        )
+                        return completion.choices[0].message.content.strip()
+                    except Exception as err:
+                        last_error = err
+                        continue
+                
+                return f"LLM Generation Error (All Groq models failed): {str(last_error)}"
             else:
                 return "Error: Local Ollama is offline and GROQ_API_KEY is missing in Streamlit Cloud Secrets."
         except Exception as e:
@@ -288,7 +305,7 @@ class RAGEngine:
         prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately and thoroughly using ONLY the provided internal documentation context below.
 
 Rules:
-1. Synthesize a direct, concise, and helpful answer. (e.g., if asked about trousers, confirm if business casual allows slacks/trousers).
+1. Synthesize a direct, concise, and helpful answer.
 2. If the user's query cannot be answered using ONLY the context provided below, state strictly: "I couldn't find specific documentation addressing your prompt in the knowledge base."
 3. Do not assume or invent facts outside the provided documentation.
 
