@@ -308,17 +308,25 @@ class RAGEngine:
             combined_score = bm25_score + (1.0 / (1.0 + vec_dist))
             scored_candidates.append((combined_score, self.documents[idx]))
             
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        top_docs = [doc for score, doc in scored_candidates[:3]]
-        
+        # Filter top docs based on score threshold to eliminate irrelevant matches
+        RELEVANCE_THRESHOLD = 0.45
+        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD][:3]
+
+        # If no documents pass the relevance bar, fail fast
+        if not top_docs:
+            return {
+                "answer": "I couldn't find specific documentation addressing your prompt in the knowledge base.",
+                "sources": []
+            }
+
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
         
         # D. System Prompt
         prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately using ONLY the documentation context below.
 
 Rules:
-1. Provide a direct, concise answer in bullet points or short paragraphs.
-2. Do NOT add conversational closing remarks (e.g., "Let me know if you need help", "Hope this helps").
+1. Synthesize a direct, concise answer using the provided context.
+2. Do NOT include conversational closing remarks or sign-offs (e.g., "Let me know if you need help").
 3. If the answer cannot be found in the context, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
 
 Documentation Context:
@@ -327,13 +335,15 @@ Documentation Context:
 User Question: {query}
 Answer:"""
 
-        # E. Unified LLM Call
-        answer = self.query_llm_engine(prompt)
+        answer_text = self.query_llm_engine(prompt)
 
-        # Return sources directly from top retrieved documents
-        sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
-        
-        return {"answer": answer, "sources": sources}
+        # Do not return sources if the LLM produces a fallback message
+        if "couldn't find specific documentation" in answer_text.lower():
+            sources = []
+        else:
+            sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
+
+        return {"answer": answer_text, "sources": sources}
         
 # Initialize Engine
 @st.cache_resource
