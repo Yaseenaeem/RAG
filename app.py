@@ -232,7 +232,7 @@ class RAGEngine:
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def query_llm_engine(self, prompt):
-        """Tries local Ollama first; automatically falls back to supported Groq models."""
+        """Tries local Ollama first; automatically falls back to active Groq models."""
         # 1. Try Local Ollama (Active when running locally on your laptop)
         try:
             url = "http://localhost:11434/api/generate"
@@ -254,8 +254,8 @@ class RAGEngine:
                 candidate_models = [
                     "llama-3.3-70b-versatile",
                     "llama-3.1-8b-instant",
-                    "mixtral-8x7b-32768",
-                    "gemma2-9b-it"
+                    "llama-3.2-3b-preview",
+                    "llama-3.2-1b-preview"
                 ]
                 
                 last_error = None
