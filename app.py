@@ -313,12 +313,12 @@ class RAGEngine:
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
         
         # D. System Prompt
-        prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately and thoroughly using ONLY the provided internal documentation context below.
+        prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately using ONLY the documentation context below.
 
 Rules:
-1. Synthesize a direct, concise, and helpful answer.
-2. If the user's query cannot be answered using ONLY the context provided below, state strictly: "I couldn't find specific documentation addressing your prompt in the knowledge base."
-3. Do not assume or invent facts outside the provided documentation.
+1. Provide a direct, concise answer in bullet points or short paragraphs.
+2. Do NOT add conversational closing remarks (e.g., "Let me know if you need help", "Hope this helps").
+3. If the answer cannot be found in the context, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
 
 Documentation Context:
 {context_str}
@@ -329,20 +329,8 @@ Answer:"""
         # E. Unified LLM Call
         answer = self.query_llm_engine(prompt)
 
-        # Detect fallback or error responses
-        fallback_phrases = [
-            "couldn't find specific documentation",
-            "llm generation error",
-            "error:",
-            "i don't have information"
-        ]
-        is_fallback = any(phrase in answer.lower() for phrase in fallback_phrases)
-
-        # Only return sources if the answer is NOT a fallback and top search score is sufficient
-        if is_fallback or (scored_candidates and scored_candidates[0][0] < 0.1):
-            sources = []
-        else:
-            sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
+        # Return sources directly from top retrieved documents
+        sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
         
         return {"answer": answer, "sources": sources}
         
