@@ -233,7 +233,7 @@ class RAGEngine:
 
     def query_llm_engine(self, prompt):
         """Tries local Ollama first; automatically falls back to Groq API on Streamlit Cloud."""
-        # 1. Try Local Ollama
+        # 1. Try Local Ollama (Active when running locally on your laptop)
         try:
             url = "http://localhost:11434/api/generate"
             payload = {"model": "gemma3", "prompt": prompt, "stream": False}
@@ -243,7 +243,7 @@ class RAGEngine:
         except Exception:
             pass  # Local Ollama not reachable; falling back to Cloud API
 
-        # 2. Fallback to Groq API
+        # 2. Fallback to Groq API (Active on Streamlit Cloud 24/7)
         try:
             from groq import Groq
             api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
@@ -251,7 +251,7 @@ class RAGEngine:
                 client = Groq(api_key=api_key)
                 completion = client.chat.completions.create(
                     messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.1-8b-instant",
+                    model="llama-3.3-70b-versatile",
                     temperature=0.2,
                 )
                 return completion.choices[0].message.content.strip()
