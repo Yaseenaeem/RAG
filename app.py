@@ -232,7 +232,7 @@ class RAGEngine:
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def query_llm_engine(self, prompt):
-        """Tries local Ollama first; automatically falls back to active Groq models."""
+        """Tries local Ollama first; automatically falls back to supported Groq models."""
         # 1. Try Local Ollama (Active when running locally on your laptop)
         try:
             url = "http://localhost:11434/api/generate"
@@ -243,19 +243,19 @@ class RAGEngine:
         except Exception:
             pass  # Local Ollama not reachable; falling back to Cloud API
 
-        # 2. Fallback to Groq API (Iterates through available model IDs to avoid 404 errors)
+        # 2. Fallback to Groq API
         try:
             from groq import Groq
             api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
             if api_key:
                 client = Groq(api_key=api_key)
                 
-                # List of potential active models on Groq
+                # Active supported models on Groq
                 candidate_models = [
-                    "llama-3.1-8b-instant",
                     "llama-3.3-70b-versatile",
-                    "llama3-8b-8192",
-                    "llama3-70b-8192"
+                    "llama-3.1-8b-instant",
+                    "mixtral-8x7b-32768",
+                    "gemma2-9b-it"
                 ]
                 
                 last_error = None
