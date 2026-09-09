@@ -290,43 +290,56 @@ class RAGEngine:
             return f"LLM Generation Error: {str(e)}"
 
     def ask(self, query, previous_questions=None):
-        # A. FAISS Vector Retrieval (k=5)
+        # 1. FAISS Vector Search
         query_vector = self.model.encode([query]).astype("float32")
-        distances, faiss_indices = self.index.search(query_vector, k=min(5, len(self.documents)))
+        distances, faiss_indices = self.index.search(query_vector, k=len(self.documents))
         
-        # B. BM25 Lexical Retrieval (k=5)
-        tokenized_query = query.lower().split()
-        bm25_scores = self.bm25.get_scores(tokenized_query)
-        bm25_indices = np.argsort(bm25_scores)[::-1][:min(5, len(self.documents))]
-        
-        # C. Combined Fusion & Re-ranking
-        candidate_indices = list(set(list(faiss_indices[0]) + list(bm25_indices)))
-        scored_candidates = []
-        for idx in candidate_indices:
-            bm25_score = bm25_scores[idx]
-            vec_dist = distances[0][0] if idx in faiss_indices[0] else 2.0
-            combined_score = bm25_score + (1.0 / (1.0 + vec_dist))
-            scored_candidates.append((combined_score, self.documents[idx]))
-            
-        # Filter top docs based on score threshold to eliminate irrelevant matches
-        RELEVANCE_THRESHOLD = 0.45
-        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD][:3]
+        # Normalize FAISS distance (0.0 to 1.0 similarity)
+        vec_scores = {
+            idx: 1.0 / (1.0 + float(dist)) 
+            for idx, dist in zip(faiss_indices[0], distances[0])
+        }
 
-        # If no documents pass the relevance bar, fail fast
+        # 2. BM25 Lexical Search
+        tokenized_query = query.lower().split()
+        bm25_raw = self.bm25.get_scores(tokenized_query)
+        max_bm25 = max(bm25_raw) if max(bm25_raw) > 0 else 1.0
+        bm25_scores = {idx: score / max_bm25 for idx, score in enumerate(bm25_raw)}
+
+        # 3. Hybrid Score Fusion
+        scored_candidates = []
+        for idx, doc in enumerate(self.documents):
+            v_score = vec_scores.get(idx, 0.0)
+            b_score = bm25_scores.get(idx, 0.0)
+            combined_score = (0.6 * v_score) + (0.4 * b_score)
+            scored_candidates.append((combined_score, doc))
+
+        # Sort descending by score
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        # 4. Strict Relevance Filter (High Cutoff)
+        RELEVANCE_THRESHOLD = 0.58
+        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD]
+
+        # Keep only the top matching document if score gap to 2nd doc is high
+        if len(top_docs) > 1 and scored_candidates[0][0] - scored_candidates[1][0] > 0.05:
+            top_docs = [top_docs[0]]
+
         if not top_docs:
             return {
                 "answer": "I couldn't find specific documentation addressing your prompt in the knowledge base.",
                 "sources": []
             }
 
+        # Build context
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
-        
-        # D. System Prompt
+
+        # 5. Prompt & Execution
         prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately using ONLY the documentation context below.
 
 Rules:
-1. Synthesize a direct, concise answer using the provided context.
-2. Do NOT include conversational closing remarks or sign-offs (e.g., "Let me know if you need help").
+1. Synthesize a direct answer using the provided context.
+2. Do NOT add conversational sign-offs or general pleasantries.
 3. If the answer cannot be found in the context, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
 
 Documentation Context:
@@ -337,7 +350,6 @@ Answer:"""
 
         answer_text = self.query_llm_engine(prompt)
 
-        # Do not return sources if the LLM produces a fallback message
         if "couldn't find specific documentation" in answer_text.lower():
             sources = []
         else:
