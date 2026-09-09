@@ -1,8 +1,7 @@
 streamlit
-pdfplumber
-numpy
 sentence-transformers
-rank-bm25
 faiss-cpu
-groq
+rank-bm25
+numpy
 requests
+groq
