@@ -1,5 +1,16 @@
-chunks.pkl
-Vector.index 
+# Python bytecode & cache
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# Streamlit local settings
+.streamlit/
+
+# OS store files
+.DS_Store
+Thumbs.db
