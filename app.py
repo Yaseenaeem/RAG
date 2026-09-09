@@ -277,34 +277,27 @@ class RAGEngine:
     def ask(self, query, previous_questions=None):
         # 1. FAISS Vector Search
         query_vector = self.model.encode([query]).astype("float32")
-        distances, faiss_indices = self.index.search(query_vector, k=len(self.documents))
+        distances, faiss_indices = self.index.search(query_vector, k=min(3, len(self.documents)))
         
-        # Normalize FAISS distance (0.0 to 1.0 similarity)
+        # Simple distance-to-similarity conversion
         vec_scores = {
-            idx: 1.0 / (1.0 + float(dist)) 
+            idx: float(dist) 
             for idx, dist in zip(faiss_indices[0], distances[0])
         }
 
         # 2. BM25 Lexical Search
         tokenized_query = query.lower().split()
         bm25_raw = self.bm25.get_scores(tokenized_query)
-        max_bm25 = max(bm25_raw) if max(bm25_raw) > 0 else 1.0
-        bm25_scores = {idx: score / max_bm25 for idx, score in enumerate(bm25_raw)}
 
-        # 3. Hybrid Score Fusion
+        # 3. Hybrid Ranking
         scored_candidates = []
-        for idx, doc in enumerate(self.documents):
-            v_score = vec_scores.get(idx, 0.0)
-            b_score = bm25_scores.get(idx, 0.0)
-            combined_score = (0.6 * v_score) + (0.4 * b_score)
-            scored_candidates.append((combined_score, doc))
+        for idx in faiss_indices[0]:
+            if idx < len(self.documents):
+                doc = self.documents[idx]
+                scored_candidates.append(doc)
 
-        # Sort descending by score
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
-
-        # 4. Calibrated Relevance Filtering
-        RELEVANCE_THRESHOLD = 0.48  # Lowered so valid policy matches aren't blocked
-        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD][:3]
+        # Always take the top retrieved documents (up to 3)
+        top_docs = scored_candidates[:3]
 
         if not top_docs:
             return {
@@ -312,16 +305,16 @@ class RAGEngine:
                 "sources": []
             }
 
-        # Build context
+        # 4. Context Assembly
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
 
-        # 5. Prompt & Execution
+        # 5. System Prompt - Instructs LLM to evaluate relevance directly
         prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately using ONLY the documentation context below.
 
 Rules:
 1. Synthesize a direct answer using the provided context.
-2. Do NOT add conversational sign-offs or general pleasantries.
-3. If the answer cannot be found in the context, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
+2. Do NOT include conversational sign-offs or general pleasantries.
+3. If the context does not contain the answer to the user's question, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
 
 Documentation Context:
 {context_str}
@@ -329,12 +322,16 @@ Documentation Context:
 User Question: {query}
 Answer:"""
 
+        # 6. Call LLM safely
         answer_text = self.query_llm_engine(prompt)
 
+        # 7. Match sources: If LLM gives fallback, don't show sources; otherwise show the top document
         if "couldn't find specific documentation" in answer_text.lower():
             sources = []
         else:
-            sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
+            # Attach ONLY the #1 best matching document to avoid cluttering unrelated source cards
+            top_source = top_docs[0]
+            sources = [{"name": top_source["name"], "page": top_source["page"], "path": top_source["path"]}]
 
         return {"answer": answer_text, "sources": sources}
         
