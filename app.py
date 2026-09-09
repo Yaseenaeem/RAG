@@ -232,8 +232,8 @@ class RAGEngine:
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def query_llm_engine(self, prompt):
-        """Tries local Ollama first; automatically falls back to active Groq models."""
-        # 1. Try Local Ollama (Active when running locally on your laptop)
+        """Tries local Ollama first; dynamically queries active Groq models if offline."""
+        # 1. Try Local Ollama (Active when running locally)
         try:
             url = "http://localhost:11434/api/generate"
             payload = {"model": "gemma3", "prompt": prompt, "stream": False}
@@ -243,37 +243,48 @@ class RAGEngine:
         except Exception:
             pass  # Local Ollama not reachable; falling back to Cloud API
 
-        # 2. Fallback to Groq API
+        # 2. Fallback to Groq API with Dynamic Model Retrieval
         try:
             from groq import Groq
             api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
-            if api_key:
-                client = Groq(api_key=api_key)
-                
-                # Active supported models on Groq
-                candidate_models = [
-                    "llama-3.3-70b-versatile",
-                    "llama-3.1-8b-instant",
-                    "llama-3.2-3b-preview",
-                    "llama-3.2-1b-preview"
-                ]
-                
-                last_error = None
-                for model_id in candidate_models:
-                    try:
-                        completion = client.chat.completions.create(
-                            messages=[{"role": "user", "content": prompt}],
-                            model=model_id,
-                            temperature=0.2,
-                        )
-                        return completion.choices[0].message.content.strip()
-                    except Exception as err:
-                        last_error = err
-                        continue
-                
-                return f"LLM Generation Error (All Groq models failed): {str(last_error)}"
-            else:
+            if not api_key:
                 return "Error: Local Ollama is offline and GROQ_API_KEY is missing in Streamlit Cloud Secrets."
+
+            client = Groq(api_key=api_key)
+
+            # A. Fetch active models directly from Groq API to avoid decommission errors
+            try:
+                available_models = [m.id for m in client.models.list().data]
+            except Exception:
+                available_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+            # B. Prioritize active high-performance models
+            preferred_order = [
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+            ]
+            
+            # Filter based on active API availability
+            target_models = [m for m in preferred_order if m in available_models]
+            if not target_models and available_models:
+                target_models = available_models
+
+            # C. Execute completion call
+            last_error = None
+            for model_id in target_models:
+                try:
+                    completion = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model_id,
+                        temperature=0.2,
+                    )
+                    return completion.choices[0].message.content.strip()
+                except Exception as err:
+                    last_error = f"Model '{model_id}' failed: {str(err)}"
+                    continue
+
+            return f"LLM Generation Error: {last_error}"
+
         except Exception as e:
             return f"LLM Generation Error: {str(e)}"
 
