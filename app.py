@@ -1,6 +1,11 @@
 import os
 import sys
+import numpy as np
+import requests
+import faiss
 import streamlit as st
+from sentence_transformers import SentenceTransformer
+from rank_bm25 import BM25Okapi
 
 # -----------------------------------------------------------------------------
 # 1. Page Configuration
@@ -129,7 +134,7 @@ st.markdown(
         color: #FFFFFF !important;
     }
 
-    /* F. CUSTOM SOURCE CARDS (DIRECT HTML TO BYPASS STREAMLIT BUTTON OVERRIDES) */
+    /* F. CUSTOM SOURCE CARDS */
     .source-card {
         background-color: #1E293B !important;
         border: 1px solid #334155 !important;
@@ -145,7 +150,7 @@ st.markdown(
         transition: border-color 0.2s ease-in-out !important;
     }
     .source-card:hover {
-        border-color: #10B981 !important; /* Green hover border */
+        border-color: #10B981 !important;
         background-color: #1E293B !important;
         color: #FFFFFF !important;
     }
@@ -177,12 +182,6 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # 3. Search Engine Dependencies & RAGEngine
 # -----------------------------------------------------------------------------
-import numpy as np
-import faiss
-from sentence_transformers import SentenceTransformer
-from rank_bm25 import BM25Okapi
-import requests  # Ensure 'import requests' is added at the top of Section 3
-
 class RAGEngine:
     def __init__(self):
         # 1. Complete Knowledge Base Setup
@@ -232,22 +231,34 @@ class RAGEngine:
         tokenized_corpus = [doc.lower().split() for doc in corpus_texts]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
-    def query_ollama_gemma3(self, prompt):
-        """Sends context and query to local Ollama instance running Gemma 3."""
+    def query_llm_engine(self, prompt):
+        """Tries local Ollama first; automatically falls back to Groq API on Streamlit Cloud."""
+        # 1. Try Local Ollama
         try:
             url = "http://localhost:11434/api/generate"
-            payload = {
-                "model": "gemma3",
-                "prompt": prompt,
-                "stream": False
-            }
-            response = requests.post(url, json=payload, timeout=120)
+            payload = {"model": "gemma3", "prompt": prompt, "stream": False}
+            response = requests.post(url, json=payload, timeout=3)
             if response.status_code == 200:
                 return response.json().get("response", "").strip()
+        except Exception:
+            pass  # Local Ollama not reachable; falling back to Cloud API
+
+        # 2. Fallback to Groq API
+        try:
+            from groq import Groq
+            api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+            if api_key:
+                client = Groq(api_key=api_key)
+                completion = client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.1-8b-instant",
+                    temperature=0.2,
+                )
+                return completion.choices[0].message.content.strip()
             else:
-                return f"Error from Ollama API: Status Code {response.status_code}"
+                return "Error: Local Ollama is offline and GROQ_API_KEY is missing in Streamlit Cloud Secrets."
         except Exception as e:
-            return f"Failed to connect to local Ollama Gemma 3 engine: {str(e)}"
+            return f"LLM Generation Error: {str(e)}"
 
     def ask(self, query, previous_questions=None):
         # A. FAISS Vector Retrieval (k=5)
@@ -273,7 +284,7 @@ class RAGEngine:
         
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
         
-        # D. System Prompt for Gemma 3
+        # D. System Prompt
         prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately and thoroughly using ONLY the provided internal documentation context below.
 
 Rules:
@@ -287,8 +298,8 @@ Documentation Context:
 User Question: {query}
 Answer:"""
 
-        # E. Ollama Gemma 3 Synthesis Call
-        answer = self.query_ollama_gemma3(prompt)
+        # E. Unified LLM Call
+        answer = self.query_llm_engine(prompt)
         sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
         
         return {"answer": answer, "sources": sources}
@@ -349,7 +360,7 @@ def open_about_modal():
     st.markdown("""
     * **LLM Engine:** Local Embedding + Lexical Ranker
     * **Search:** FAISS Hybrid Vector Search
-    * **Security:** 100% Local Execution
+    * **Security:** Enterprise RAG Architecture
     """)
 
 # -----------------------------------------------------------------------------
@@ -459,5 +470,3 @@ st.caption("🔒 Responses are generated from your organization's documents.")
 if prompt := st.chat_input("Ask anything about your knowledge base..."):
     submit_query(prompt)
     st.rerun()
-
-# Run Command:  python -m streamlit run app.py
