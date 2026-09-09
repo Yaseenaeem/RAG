@@ -1,6 +1,5 @@
 import os
 import sys
-import html
 import numpy as np
 import requests
 import faiss
@@ -233,88 +232,93 @@ class RAGEngine:
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def query_llm_engine(self, prompt):
+        """Tries local Ollama first; dynamically queries active Groq models if offline."""
+        # 1. Try Local Ollama (Active when running locally)
         try:
-            # GROQ API EXECUTION
-            if os.getenv("GROQ_API_KEY"):
-                response = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.2
-                    }
-                )
-                data = response.json()
-                # Parse OpenAI/Groq response schema
-                if "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"]["content"].strip()
+            url = "http://localhost:11434/api/generate"
+            payload = {"model": "gemma3", "prompt": prompt, "stream": False}
+            response = requests.post(url, json=payload, timeout=3)
+            if response.status_code == 200:
+                return response.json().get("response", "").strip()
+        except Exception:
+            pass  # Local Ollama not reachable; falling back to Cloud API
 
-            # OLLAMA LOCAL EXECUTION (Fallback if no GROQ_API_KEY)
-            else:
-                response = requests.post(
-                    "http://localhost:11434/api/generate",
-                    json={
-                        "model": "llama3",
-                        "prompt": prompt,
-                        "stream": False
-                    }
-                )
-                data = response.json()
-                # Parse Ollama response schema
-                if "response" in data:
-                    return data["response"].strip()
+        # 2. Fallback to Groq API with Dynamic Model Retrieval
+        try:
+            from groq import Groq
+            api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+            if not api_key:
+                return "Error: Local Ollama is offline and GROQ_API_KEY is missing in Streamlit Cloud Secrets."
 
-            return "I couldn't find specific documentation addressing your prompt in the knowledge base."
+            client = Groq(api_key=api_key)
+
+            # A. Fetch active models directly from Groq API to avoid decommission errors
+            try:
+                available_models = [m.id for m in client.models.list().data]
+            except Exception:
+                available_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+            # B. Prioritize active high-performance models
+            preferred_order = [
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+            ]
+            
+            # Filter based on active API availability
+            target_models = [m for m in preferred_order if m in available_models]
+            if not target_models and available_models:
+                target_models = available_models
+
+            # C. Execute completion call
+            last_error = None
+            for model_id in target_models:
+                try:
+                    completion = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model_id,
+                        temperature=0.2,
+                    )
+                    return completion.choices[0].message.content.strip()
+                except Exception as err:
+                    last_error = f"Model '{model_id}' failed: {str(err)}"
+                    continue
+
+            return f"LLM Generation Error: {last_error}"
 
         except Exception as e:
-            print(f"LLM Engine Error: {e}")
-            return "I couldn't find specific documentation addressing your prompt in the knowledge base."
+            return f"LLM Generation Error: {str(e)}"
 
     def ask(self, query, previous_questions=None):
-        # 1. FAISS Vector Search
+        # A. FAISS Vector Retrieval (k=5)
         query_vector = self.model.encode([query]).astype("float32")
-        distances, faiss_indices = self.index.search(query_vector, k=min(3, len(self.documents)))
+        distances, faiss_indices = self.index.search(query_vector, k=min(5, len(self.documents)))
         
-        # Simple distance-to-similarity conversion
-        vec_scores = {
-            idx: float(dist) 
-            for idx, dist in zip(faiss_indices[0], distances[0])
-        }
-
-        # 2. BM25 Lexical Search
+        # B. BM25 Lexical Retrieval (k=5)
         tokenized_query = query.lower().split()
-        bm25_raw = self.bm25.get_scores(tokenized_query)
-
-        # 3. Hybrid Ranking
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+        bm25_indices = np.argsort(bm25_scores)[::-1][:min(5, len(self.documents))]
+        
+        # C. Combined Fusion & Re-ranking
+        candidate_indices = list(set(list(faiss_indices[0]) + list(bm25_indices)))
         scored_candidates = []
-        for idx in faiss_indices[0]:
-            if idx < len(self.documents):
-                doc = self.documents[idx]
-                scored_candidates.append(doc)
-
-        # Always take the top retrieved documents (up to 3)
-        top_docs = scored_candidates[:3]
-
-        if not top_docs:
-            return {
-                "answer": "I couldn't find specific documentation addressing your prompt in the knowledge base.",
-                "sources": []
-            }
-
-        # 4. Context Assembly
+        for idx in candidate_indices:
+            bm25_score = bm25_scores[idx]
+            vec_dist = distances[0][0] if idx in faiss_indices[0] else 2.0
+            combined_score = bm25_score + (1.0 / (1.0 + vec_dist))
+            scored_candidates.append((combined_score, self.documents[idx]))
+            
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        top_docs = [doc for score, doc in scored_candidates[:3]]
+        
         context_str = "\n\n".join([f"Document [{doc['name']}]:\n{doc['text']}" for doc in top_docs])
-
-        # 5. System Prompt - Instructs LLM to evaluate relevance directly
-        prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately using ONLY the documentation context below.
+        
+        # D. System Prompt
+        prompt = f"""You are KORVA, an AI HR Assistant. Answer the user's question accurately and thoroughly using ONLY the provided internal documentation context below.
 
 Rules:
-1. Synthesize a direct answer using the provided context.
-2. Do NOT include conversational sign-offs or general pleasantries.
-3. If the context does not contain the answer to the user's question, output EXACTLY: "I couldn't find specific documentation addressing your prompt in the knowledge base."
+1. Synthesize a direct, concise, and helpful answer.
+2. If the user's query cannot be answered using ONLY the context provided below, state strictly: "I couldn't find specific documentation addressing your prompt in the knowledge base."
+3. Do not assume or invent facts outside the provided documentation.
 
 Documentation Context:
 {context_str}
@@ -322,18 +326,11 @@ Documentation Context:
 User Question: {query}
 Answer:"""
 
-        # 6. Call LLM safely
-        answer_text = self.query_llm_engine(prompt)
-
-        # 7. Match sources: If LLM gives fallback, don't show sources; otherwise show the top document
-        if "couldn't find specific documentation" in answer_text.lower():
-            sources = []
-        else:
-            # Attach ONLY the #1 best matching document to avoid cluttering unrelated source cards
-            top_source = top_docs[0]
-            sources = [{"name": top_source["name"], "page": top_source["page"], "path": top_source["path"]}]
-
-        return {"answer": answer_text, "sources": sources}
+        # E. Unified LLM Call (Ensures generated text is returned, NOT numerical scores)
+        answer = self.query_llm_engine(prompt)
+        sources = [{"name": doc["name"], "page": doc["page"], "path": doc["path"]} for doc in top_docs]
+        
+        return {"answer": answer, "sources": sources}
         
 # Initialize Engine
 @st.cache_resource
@@ -483,23 +480,14 @@ with workspace.container():
                     st.markdown('<div class="assistant-label">KORVA</div>', unsafe_allow_html=True)
                     st.markdown(msg["content"])
                     
-                    # Display sources ONLY if valid sources exist and the answer isn't a fallback message
                     sources = msg.get("sources", [])
-                    fallback_phrases = [
-                        "couldn't find specific documentation",
-                        "llm generation error",
-                        "error:"
-                    ]
-                    is_fallback_msg = any(phrase in msg["content"].lower() for phrase in fallback_phrases)
-
-                    if sources and not is_fallback_msg:
+                    if sources:
                         st.divider()
                         st.caption("Sources")
                         for src in sources:
-                            safe_name = html.escape(src['name'])
                             card_html = f"""
                             <div class="source-card">
-                                📄 <span>{safe_name} (Page {src['page']})</span>
+                                📄 <span>{src['name']} (Page {src['page']})</span>
                             </div>
                             """
                             st.markdown(card_html, unsafe_allow_html=True)
