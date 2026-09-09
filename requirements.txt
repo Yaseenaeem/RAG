@@ -1,7 +1,8 @@
-streamlit>=1.30.0
-sentence-transformers
-faiss-cpu
-rank-bm25
+streamlit
+pdfplumber
 numpy
-pypdf
+sentence-transformers
+rank-bm25
+faiss-cpu
 groq
+requests
