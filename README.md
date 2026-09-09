@@ -40,7 +40,8 @@ Hybrid Candidate Retrieval (FAISS + BM25)
        ↓
 Context Aggregation & Grounding
        ↓
-Response Generation + Source Citations```
+Response Generation + Source Citations
+```
 
 ---
 
