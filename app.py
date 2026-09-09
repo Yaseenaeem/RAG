@@ -1,5 +1,6 @@
 import os
 import sys
+import html
 import numpy as np
 import requests
 import faiss
