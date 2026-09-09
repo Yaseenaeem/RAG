@@ -302,13 +302,9 @@ class RAGEngine:
         # Sort descending by score
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
 
-        # 4. Strict Relevance Filter (High Cutoff)
-        RELEVANCE_THRESHOLD = 0.58
-        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD]
-
-        # Keep only the top matching document if score gap to 2nd doc is high
-        if len(top_docs) > 1 and scored_candidates[0][0] - scored_candidates[1][0] > 0.05:
-            top_docs = [top_docs[0]]
+        # 4. Calibrated Relevance Filtering
+        RELEVANCE_THRESHOLD = 0.48  # Lowered so valid policy matches aren't blocked
+        top_docs = [doc for score, doc in scored_candidates if score >= RELEVANCE_THRESHOLD][:3]
 
         if not top_docs:
             return {
